@@ -1,10 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { INITIAL_DATA } from '../data/initialData';
 import { calculateIPK, calculateIPS, getMaxSKSLimit } from '../utils/gradeCalculator';
 import { getDeadlineInfo, sendBrowserNotification } from '../utils/notificationHelper';
+import { generateSyncCode, pushDataToCloud, pullDataFromCloud } from '../utils/cloudSync';
 
 const AppDataContext = createContext(null);
 const STORAGE_KEY = 'MAHASISWA_HUB_DATA_V1';
+const SYNC_CONFIG_KEY = 'MAHASISWA_HUB_SYNC_CONFIG_V1';
 
 export function AppDataProvider({ children }) {
   const [data, setData] = useState(() => {
@@ -23,7 +25,29 @@ export function AppDataProvider({ children }) {
     return localStorage.getItem('THEME') || 'light';
   });
 
+  // Cloud Sync State
+  const [syncConfig, setSyncConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem(SYNC_CONFIG_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (err) {
+      console.error('Failed to load sync config:', err);
+    }
+    return {
+      enabled: false,
+      syncCode: '',
+      pin: '',
+      lastSyncedAt: null,
+      syncStatus: 'disconnected', // 'synced' | 'syncing' | 'error' | 'disconnected'
+      isSyncing: false,
+    };
+  });
+
   const [notifications, setNotifications] = useState([]);
+  const isInitialMount = useRef(true);
+  const isRemoteUpdate = useRef(false);
 
   // Sync state to LocalStorage
   useEffect(() => {
@@ -33,6 +57,15 @@ export function AppDataProvider({ children }) {
       console.error('Failed to save to local storage:', err);
     }
   }, [data]);
+
+  // Sync config to LocalStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(syncConfig));
+    } catch (err) {
+      console.error('Failed to save sync config:', err);
+    }
+  }, [syncConfig]);
 
   // Apply Theme
   useEffect(() => {
@@ -44,12 +77,87 @@ export function AppDataProvider({ children }) {
     localStorage.setItem('THEME', theme);
   }, [theme]);
 
-  // Auto-generate active notifications from tasks & academic events
+  // Auto Cloud Sync Debounce on local data change
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
+
+    if (!syncConfig.enabled || !syncConfig.syncCode) return;
+
+    setSyncConfig((prev) => ({ ...prev, isSyncing: true, syncStatus: 'syncing' }));
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await pushDataToCloud(syncConfig.syncCode, data, syncConfig.pin);
+        if (res.success) {
+          setSyncConfig((prev) => ({
+            ...prev,
+            isSyncing: false,
+            syncStatus: 'synced',
+            lastSyncedAt: new Date().toISOString(),
+          }));
+        }
+      } catch (err) {
+        setSyncConfig((prev) => ({
+          ...prev,
+          isSyncing: false,
+          syncStatus: 'error',
+        }));
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [data, syncConfig.enabled, syncConfig.syncCode]);
+
+  // Periodic Cloud Sync Polling (every 20s or on window focus)
+  useEffect(() => {
+    if (!syncConfig.enabled || !syncConfig.syncCode) return;
+
+    const pullRemote = async () => {
+      try {
+        const res = await pullDataFromCloud(syncConfig.syncCode, syncConfig.pin);
+        if (res.success && res.data) {
+          // If remote data is valid, update local state
+          const remoteTime = new Date(res.updatedAt || 0).getTime();
+          const localTime = new Date(syncConfig.lastSyncedAt || 0).getTime();
+
+          if (remoteTime > localTime + 2000) {
+            isRemoteUpdate.current = true;
+            setData(res.data);
+            setSyncConfig((prev) => ({
+              ...prev,
+              syncStatus: 'synced',
+              lastSyncedAt: res.updatedAt,
+            }));
+          }
+        }
+      } catch (err) {
+        // silent fail on background poll
+      }
+    };
+
+    const interval = setInterval(pullRemote, 20000);
+    const handleFocus = () => pullRemote();
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [syncConfig.enabled, syncConfig.syncCode, syncConfig.pin, syncConfig.lastSyncedAt]);
+
+  // Auto-generate notifications
   useEffect(() => {
     const list = [];
     const now = new Date();
 
-    // Check tasks for deadlines
     data.tasks.forEach((task) => {
       if (task.status !== 'done' && task.deadline) {
         const info = getDeadlineInfo(task.deadline, task.deadlineTime);
@@ -87,7 +195,6 @@ export function AppDataProvider({ children }) {
       }
     });
 
-    // Check Academic Calendar events within next 7 days
     data.academicCalendar.forEach((event) => {
       const eventDate = new Date(event.date);
       const diffDays = Math.ceil((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
@@ -107,18 +214,115 @@ export function AppDataProvider({ children }) {
     setNotifications(list);
   }, [data.tasks, data.academicCalendar]);
 
-  // Derived calculations
+  // Calculations
   const currentKRS_SKS = data.krs.courses.reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
-  
   const { ipk: overallIPK, totalSKS: totalEarnedSKS } = calculateIPK(data.gradeHistory);
-  
   const latestFinishedSemester = data.gradeHistory[data.gradeHistory.length - 1];
   const latestIPS = latestFinishedSemester ? latestFinishedSemester.ips : 3.50;
   const maxAllowedSKS = getMaxSKSLimit(latestIPS);
 
-  // Handlers
+  // Theme
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
+
+  // --- CLOUD SYNC ACTIONS ---
+  const startCloudSync = async (pin = '') => {
+    const code = generateSyncCode();
+    setSyncConfig({
+      enabled: true,
+      syncCode: code,
+      pin,
+      lastSyncedAt: null,
+      syncStatus: 'syncing',
+      isSyncing: true,
+    });
+
+    try {
+      const res = await pushDataToCloud(code, data, pin);
+      setSyncConfig({
+        enabled: true,
+        syncCode: code,
+        pin,
+        lastSyncedAt: res.timestamp || new Date().toISOString(),
+        syncStatus: 'synced',
+        isSyncing: false,
+      });
+      return { success: true, syncCode: code };
+    } catch (err) {
+      setSyncConfig((prev) => ({
+        ...prev,
+        syncStatus: 'error',
+        isSyncing: false,
+      }));
+      return { success: false, message: err.message };
+    }
+  };
+
+  const joinSyncSession = async (syncCode, pin = '') => {
+    if (!syncCode) return { success: false, message: 'Kode sinkronisasi wajib diisi.' };
+
+    setSyncConfig((prev) => ({ ...prev, isSyncing: true, syncStatus: 'syncing' }));
+
+    try {
+      const res = await pullDataFromCloud(syncCode, pin);
+      if (res.success && res.data) {
+        isRemoteUpdate.current = true;
+        setData(res.data);
+        setSyncConfig({
+          enabled: true,
+          syncCode: syncCode.toUpperCase().trim(),
+          pin,
+          lastSyncedAt: res.updatedAt || new Date().toISOString(),
+          syncStatus: 'synced',
+          isSyncing: false,
+        });
+        return { success: true, message: 'Berhasil terhubung ke sesi Cloud Sync!' };
+      }
+      throw new Error('Data tidak ditemukan.');
+    } catch (err) {
+      setSyncConfig((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncStatus: 'error',
+      }));
+      return { success: false, message: err.message };
+    }
+  };
+
+  const triggerManualSync = async () => {
+    if (!syncConfig.enabled || !syncConfig.syncCode) return;
+
+    setSyncConfig((prev) => ({ ...prev, isSyncing: true, syncStatus: 'syncing' }));
+
+    try {
+      const pushRes = await pushDataToCloud(syncConfig.syncCode, data, syncConfig.pin);
+      setSyncConfig((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncStatus: 'synced',
+        lastSyncedAt: pushRes.timestamp || new Date().toISOString(),
+      }));
+      return { success: true, message: 'Data berhasil disinkronkan ke Cloud!' };
+    } catch (err) {
+      setSyncConfig((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncStatus: 'error',
+      }));
+      return { success: false, message: err.message };
+    }
+  };
+
+  const disconnectCloudSync = () => {
+    setSyncConfig({
+      enabled: false,
+      syncCode: '',
+      pin: '',
+      lastSyncedAt: null,
+      syncStatus: 'disconnected',
+      isSyncing: false,
+    });
   };
 
   // --- KRS ACTIONS ---
@@ -231,7 +435,6 @@ export function AppDataProvider({ children }) {
       tasks: [newTask, ...prev.tasks],
     }));
 
-    // Trigger sample browser notification if permitted
     sendBrowserNotification(`Tugas Baru: ${task.title}`, {
       body: `Deadline: ${task.deadline} ${task.deadlineTime || ''}`,
     });
@@ -366,6 +569,7 @@ export function AppDataProvider({ children }) {
   const resetToDefaultData = () => {
     setData(INITIAL_DATA);
     localStorage.removeItem(STORAGE_KEY);
+    disconnectCloudSync();
   };
 
   const markNotificationRead = (id) => {
@@ -388,6 +592,12 @@ export function AppDataProvider({ children }) {
     overallIPK,
     latestIPS,
     maxAllowedSKS,
+    // Cloud Sync
+    syncConfig,
+    startCloudSync,
+    joinSyncSession,
+    triggerManualSync,
+    disconnectCloudSync,
     // Actions
     addCourse,
     updateCourse,

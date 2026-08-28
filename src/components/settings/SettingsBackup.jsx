@@ -8,7 +8,14 @@ import {
   CheckCircle2,
   AlertTriangle,
   Database,
+  Cloud,
+  Smartphone,
+  Copy,
+  Check,
+  Link,
+  Unlink,
   Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAppData } from '../../context/AppDataContext';
 import confetti from 'canvas-confetti';
@@ -20,6 +27,11 @@ export default function SettingsBackup() {
     exportDataAsJSON,
     importDataFromJSON,
     resetToDefaultData,
+    syncConfig,
+    startCloudSync,
+    joinSyncSession,
+    triggerManualSync,
+    disconnectCloudSync,
   } = useAppData();
 
   const { studentProfile } = data;
@@ -36,6 +48,13 @@ export default function SettingsBackup() {
     totalRequiredSKS: studentProfile.totalRequiredSKS || 144,
   });
 
+  // Cloud Sync Form States
+  const [inputSyncCode, setInputSyncCode] = useState('');
+  const [inputPin, setInputPin] = useState('');
+  const [createPin, setCreatePin] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
+
   const [feedbackMessage, setFeedbackMessage] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -49,6 +68,59 @@ export default function SettingsBackup() {
     });
     setFeedbackMessage({ type: 'success', text: 'Profil mahasiswa berhasil diperbarui!' });
     setTimeout(() => setFeedbackMessage(null), 3000);
+  };
+
+  // Start Cloud Sync (Laptop / Master Device)
+  const handleStartSync = async () => {
+    setSyncLoading(true);
+    const res = await startCloudSync(createPin);
+    setSyncLoading(false);
+    if (res.success) {
+      setFeedbackMessage({
+        type: 'success',
+        text: `Cloud Sync berhasil diaktifkan! Kode Anda: ${res.syncCode}. Masukkan kode ini di HP Anda.`,
+      });
+      confetti({ particleCount: 50, spread: 60 });
+    } else {
+      setFeedbackMessage({ type: 'error', text: res.message });
+    }
+  };
+
+  // Join Cloud Sync (HP / Secondary Device)
+  const handleJoinSync = async (e) => {
+    e.preventDefault();
+    if (!inputSyncCode) return;
+
+    setSyncLoading(true);
+    const res = await joinSyncSession(inputSyncCode, inputPin);
+    setSyncLoading(false);
+
+    if (res.success) {
+      setFeedbackMessage({
+        type: 'success',
+        text: 'Perangkat berhasil terhubung! Data perkuliahan Anda telah tersinkronisasi.',
+      });
+      confetti({ particleCount: 60, spread: 70 });
+    } else {
+      setFeedbackMessage({ type: 'error', text: res.message });
+    }
+  };
+
+  const handleCopySyncCode = () => {
+    if (syncConfig.syncCode) {
+      navigator.clipboard.writeText(syncConfig.syncCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
+  };
+
+  const handleManualSyncNow = async () => {
+    setSyncLoading(true);
+    const res = await triggerManualSync();
+    setSyncLoading(false);
+    if (res.success) {
+      setFeedbackMessage({ type: 'success', text: res.message });
+    }
   };
 
   const handleFileImport = (e) => {
@@ -98,7 +170,212 @@ export default function SettingsBackup() {
         </div>
       )}
 
-      {/* 1. Profile Settings */}
+      {/* 1. SINKRONISASI CLOUD MULTI-DEVICE (LAPTOP <-> HP) */}
+      <div className="bg-gradient-to-br from-indigo-900 via-indigo-950 to-slate-900 p-6 sm:p-8 rounded-3xl text-white shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-2xl bg-indigo-500/30 backdrop-blur-md border border-indigo-400/30 text-indigo-300">
+              <Cloud className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                Sinkronisasi Cloud Multi-Device
+                <Sparkles className="h-4 w-4 text-amber-400 fill-amber-400" />
+              </h3>
+              <p className="text-xs text-indigo-200 mt-0.5">
+                Hubungkan Laptop dan HP agar seluruh data perkuliahan otomatis sinkron secara real-time
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {syncConfig.enabled ? (
+              <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                Tersinkronisasi
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-white/10 text-indigo-200">
+                Mode Lokal
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* --- IF CLOUD SYNC IS ENABLED --- */}
+        {syncConfig.enabled ? (
+          <div className="mt-6 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Box 1: Kode Sinkronisasi Aktif */}
+              <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/15 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-semibold text-indigo-200">
+                    KODE SINKRONISASI PERANGKAT ANDA:
+                  </span>
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-3xl font-black tracking-widest text-amber-300">
+                      {syncConfig.syncCode}
+                    </span>
+                    <button
+                      onClick={handleCopySyncCode}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold transition-colors"
+                      title="Salin Kode"
+                    >
+                      {copiedCode ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                      <span>{copiedCode ? 'Tersalin!' : 'Salin'}</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-indigo-200 mt-3 leading-relaxed">
+                    👉 Buka website ini di browser HP Anda, masuk ke menu <strong>Pengaturan & Backup</strong>, lalu masukkan kode di atas untuk menghubungkan HP Anda.
+                  </p>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-xs text-indigo-300">
+                  <span>Terakhir Sinkron:</span>
+                  <span className="font-semibold text-white">
+                    {syncConfig.lastSyncedAt
+                      ? new Date(syncConfig.lastSyncedAt).toLocaleTimeString('id-ID', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })
+                      : 'Baru saja'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Box 2: Kontrol Sinkronisasi */}
+              <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/15 flex flex-col justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                    <Smartphone className="h-4 w-4 text-indigo-300" />
+                    Status Multi-Device
+                  </h4>
+                  <p className="text-xs text-indigo-200 mt-2 leading-relaxed">
+                    Setiap perubahan tugas, KRS, atau nilai yang Anda buat di perangkat ini akan otomatis terkirim ke cloud dalam hitungan detik.
+                  </p>
+                </div>
+
+                <div className="mt-6 flex flex-wrap gap-2">
+                  <button
+                    onClick={handleManualSyncNow}
+                    disabled={syncLoading}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold text-xs transition-colors shadow-md disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${syncLoading ? 'animate-spin' : ''}`} />
+                    <span>Sinkronkan Sekarang</span>
+                  </button>
+
+                  <button
+                    onClick={disconnectCloudSync}
+                    className="py-2.5 px-4 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-xs border border-rose-500/30 transition-colors"
+                  >
+                    Putuskan Koneksi
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* --- IF CLOUD SYNC IS NOT ENABLED YET --- */
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Option 1: Buat Kode Baru (Untuk Laptop / Perangkat Utama) */}
+            <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/15 flex flex-col justify-between">
+              <div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary-500/30 text-primary-200 border border-primary-400/30">
+                  LANGKAH 1 (DI LAPTOP)
+                </span>
+                <h4 className="font-bold text-sm text-white mt-3 flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-400" />
+                  Aktifkan Sesi Cloud Baru
+                </h4>
+                <p className="text-xs text-indigo-200 mt-2 leading-relaxed">
+                  Buat kode sinkronisasi unik untuk mengunggah data laptop Anda ke cloud agar bisa dihubungkan ke HP.
+                </p>
+
+                <div className="mt-4">
+                  <label className="block text-xs font-semibold text-indigo-200 mb-1">
+                    PIN Keamanan (Opsional)
+                  </label>
+                  <input
+                    type="password"
+                    maxLength={6}
+                    placeholder="Contoh: 1234 (Boleh kosong)"
+                    value={createPin}
+                    onChange={(e) => setCreatePin(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white placeholder-indigo-300 text-xs focus:outline-hidden focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={handleStartSync}
+                disabled={syncLoading}
+                className="mt-6 w-full py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs shadow-md transition-colors disabled:opacity-50"
+              >
+                {syncLoading ? 'Mengaktifkan...' : 'Aktifkan Cloud Sync & Buat Kode'}
+              </button>
+            </div>
+
+            {/* Option 2: Masukkan Kode (Untuk HP / Perangkat Kedua) */}
+            <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/15 flex flex-col justify-between">
+              <form onSubmit={handleJoinSync} className="flex flex-col justify-between h-full">
+                <div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/30 text-emerald-200 border border-emerald-400/30">
+                    LANGKAH 2 (DI HP)
+                  </span>
+                  <h4 className="font-bold text-sm text-white mt-3 flex items-center gap-2">
+                    <Link className="h-4 w-4 text-emerald-400" />
+                    Gabung dengan Kode Sinkronisasi
+                  </h4>
+                  <p className="text-xs text-indigo-200 mt-2 leading-relaxed">
+                    Sudah mengaktifkan di laptop? Masukkan kode sinkronisasi Anda di bawah untuk mengunduh data ke HP ini.
+                  </p>
+
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-indigo-200 mb-1">
+                        Kode Sinkronisasi *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Contoh: MHS-8492-X"
+                        value={inputSyncCode}
+                        onChange={(e) => setInputSyncCode(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white placeholder-indigo-300 font-bold text-xs uppercase focus:outline-hidden focus:ring-2 focus:ring-emerald-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-indigo-200 mb-1">
+                        PIN Keamanan (Jika sebelumnya diatur)
+                      </label>
+                      <input
+                        type="password"
+                        maxLength={6}
+                        placeholder="PIN Anda"
+                        value={inputPin}
+                        onChange={(e) => setInputPin(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white placeholder-indigo-300 text-xs focus:outline-hidden focus:ring-2 focus:ring-emerald-400"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={syncLoading}
+                  className="mt-6 w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow-md transition-colors disabled:opacity-50"
+                >
+                  {syncLoading ? 'Menghubungkan...' : 'Hubungkan ke Laptop Sekarang'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 2. Profile Settings */}
       <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="flex items-center gap-2.5 mb-6">
           <div className="p-2 rounded-xl bg-primary-50 dark:bg-primary-950 text-primary-600 dark:text-primary-400">
@@ -245,7 +522,7 @@ export default function SettingsBackup() {
         </form>
       </div>
 
-      {/* 2. Backup & Data Management */}
+      {/* 3. Backup & Data Management */}
       <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="flex items-center gap-2.5 mb-6">
           <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400">
@@ -253,10 +530,10 @@ export default function SettingsBackup() {
           </div>
           <div>
             <h3 className="font-bold text-base text-slate-900 dark:text-white">
-              Cadangan & Pemulihan Data (Backup & Restore)
+              Cadangan Manual & Berkas JSON (Offline Backup)
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Seluruh data tersimpan secara lokal dan aman di browser Anda. Ekspor cadangan JSON agar tidak hilang saat berganti perangkat.
+              Unduh cadangan berkas JSON secara manual untuk disimpan di penyimpanan komputer Anda.
             </p>
           </div>
         </div>
