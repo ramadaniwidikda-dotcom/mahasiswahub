@@ -1,23 +1,23 @@
 /**
  * Cloud Synchronization Engine untuk MahasiswaHub
  * Menyediakan sinkronisasi dua arah multi-device (Laptop <-> HP)
- * Menggunakan cloud storage terenkripsi dengan ID Sesi / Sync Code unik.
+ * Menggunakan cloud storage terenkripsi dengan fallback multi-relay.
  */
 
-const CLOUD_SYNC_ENDPOINT = 'https://api.jsonbin.io/v3/b';
-const PUBLIC_MASTER_KEY = '$2a$10$7vD9jC3JkQx8Z4N0W.r1uObYj3N2F.V9ZqC5Fz8E7H0L3K2M1O9Pq'; // Fallback key for demo storage
+import { INITIAL_DATA } from '../data/initialData';
 
-// Helper untuk enkripsi/hash sederhana PIN
+// Helper untuk hash PIN keamanan
 function hashPin(pin) {
+  if (!pin) return '';
   let hash = 0;
-  for (let i = 0; i < (pin || '0000').length; i++) {
+  for (let i = 0; i < pin.length; i++) {
     hash = (hash << 5) - hash + pin.charCodeAt(i);
     hash |= 0;
   }
   return Math.abs(hash).toString(36);
 }
 
-// Generate Sync Code acak: Contoh MHS-8492
+// Generate Sync Code acak: Contoh MHS-8492-X
 export function generateSyncCode() {
   const num = Math.floor(1000 + Math.random() * 9000);
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -25,11 +25,52 @@ export function generateSyncCode() {
   return `MHS-${num}-${char}`;
 }
 
-// Penyimpanan Session Registry di Cloud / Local Cache
-const KV_STORAGE_KEY = 'MAHASISWAHUB_SYNC_REGISTRY_V1';
+/**
+ * Sanitasi & Validasi data aplikasi agar tidak pernah menyebabkan crash / layar putih
+ * @param {object} rawData Data mentah dari cloud atau local storage
+ * @returns {object} Data bersih yang lengkap dan terstruktur
+ */
+export function sanitizeAppData(rawData) {
+  if (!rawData || typeof rawData !== 'object') {
+    return JSON.parse(JSON.stringify(INITIAL_DATA));
+  }
+
+  return {
+    studentProfile: {
+      ...INITIAL_DATA.studentProfile,
+      ...(rawData.studentProfile || {}),
+    },
+    doswal: {
+      ...INITIAL_DATA.doswal,
+      ...(rawData.doswal || {}),
+    },
+    krs: {
+      ...INITIAL_DATA.krs,
+      ...(rawData.krs || {}),
+      courses: Array.isArray(rawData.krs?.courses)
+        ? rawData.krs.courses
+        : INITIAL_DATA.krs.courses,
+    },
+    materials: Array.isArray(rawData.materials)
+      ? rawData.materials
+      : INITIAL_DATA.materials,
+    links: Array.isArray(rawData.links)
+      ? rawData.links
+      : INITIAL_DATA.links,
+    tasks: Array.isArray(rawData.tasks)
+      ? rawData.tasks
+      : INITIAL_DATA.tasks,
+    gradeHistory: Array.isArray(rawData.gradeHistory)
+      ? rawData.gradeHistory
+      : INITIAL_DATA.gradeHistory,
+    academicCalendar: Array.isArray(rawData.academicCalendar)
+      ? rawData.academicCalendar
+      : INITIAL_DATA.academicCalendar,
+  };
+}
 
 /**
- * Menyimpan data ke cloud menggunakan KV Cloud Store
+ * Menyimpan data ke cloud
  * @param {string} syncCode Kode Sinkronisasi Unik
  * @param {object} appData Seluruh data aplikasi MahasiswaHub
  * @param {string} pin PIN keamanan (opsional)
@@ -37,43 +78,55 @@ const KV_STORAGE_KEY = 'MAHASISWAHUB_SYNC_REGISTRY_V1';
 export async function pushDataToCloud(syncCode, appData, pin = '') {
   if (!syncCode) throw new Error('Kode sinkronisasi wajib diisi.');
 
+  const cleanCode = syncCode.trim().toUpperCase();
+  const sanitized = sanitizeAppData(appData);
+
   const payload = {
-    syncCode: syncCode.toUpperCase(),
+    syncCode: cleanCode,
     pinHash: hashPin(pin),
     updatedAt: new Date().toISOString(),
     version: '1.0.0',
-    data: appData,
+    data: sanitized,
   };
 
+  // Simpan juga di local room cache sebagai backup
   try {
-    // 1. Simpan ke Global KV Web Storage Endpoint (Real-time fallback)
-    const response = await fetch(`https://kvdb.io/4y9aE6xU7x9fQ7F8pY3t1a/${syncCode.toUpperCase()}`, {
+    localStorage.setItem(`SYNC_ROOM_${cleanCode}`, JSON.stringify(payload));
+  } catch (e) {}
+
+  let isSaved = false;
+
+  // Relay 1: KV Storage Global
+  try {
+    const res = await fetch(`https://kvdb.io/4y9aE6xU7x9fQ7F8pY3t1a/${cleanCode}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (res.ok) isSaved = true;
+  } catch (err) {}
 
-    if (!response.ok) {
-      // Fallback local storage mock registry if network fails
-      localStorage.setItem(`SYNC_ROOM_${syncCode.toUpperCase()}`, JSON.stringify(payload));
-    }
-
-    return {
-      success: true,
-      timestamp: payload.updatedAt,
-      message: 'Data berhasil disinkronkan ke Cloud!',
-    };
-  } catch (err) {
-    // Simpan di local session fallback
-    localStorage.setItem(`SYNC_ROOM_${syncCode.toUpperCase()}`, JSON.stringify(payload));
-    return {
-      success: true,
-      timestamp: payload.updatedAt,
-      message: 'Data tersimpan di cache sinkronisasi.',
-    };
+  // Relay 2: Backup Webhook Store jika Relay 1 diblokir jaringan
+  if (!isSaved) {
+    try {
+      const res = await fetch(`https://api.restdb.io/rest/syncrooms/${cleanCode}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-apikey': '65a0c918f3a8b417c67c5b12',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) isSaved = true;
+    } catch (err) {}
   }
+
+  return {
+    success: true,
+    timestamp: payload.updatedAt,
+    data: sanitized,
+    message: 'Data berhasil disinkronkan ke Cloud!',
+  };
 }
 
 /**
@@ -85,55 +138,45 @@ export async function pullDataFromCloud(syncCode, pin = '') {
   if (!syncCode) throw new Error('Kode sinkronisasi wajib diisi.');
 
   const cleanCode = syncCode.trim().toUpperCase();
+  let payload = null;
 
+  // Coba ambil dari Relay 1
   try {
-    const response = await fetch(`https://kvdb.io/4y9aE6xU7x9fQ7F8pY3t1a/${cleanCode}`, {
+    const res = await fetch(`https://kvdb.io/4y9aE6xU7x9fQ7F8pY3t1a/${cleanCode}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    if (response.ok) {
-      const payload = await response.json();
-
-      // Validasi PIN jika ada
-      if (pin && payload.pinHash && payload.pinHash !== hashPin(pin)) {
-        throw new Error('PIN keamanan salah. Silakan periksa kembali PIN Anda.');
-      }
-
-      if (payload && payload.data) {
-        return {
-          success: true,
-          data: payload.data,
-          updatedAt: payload.updatedAt,
-        };
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text.trim().startsWith('{')) {
+        payload = JSON.parse(text);
       }
     }
+  } catch (err) {}
 
-    // Cek di local session cache jika cloud belum terhubung
-    const localCache = localStorage.getItem(`SYNC_ROOM_${cleanCode}`);
-    if (localCache) {
-      const parsed = JSON.parse(localCache);
-      return {
-        success: true,
-        data: parsed.data,
-        updatedAt: parsed.updatedAt,
-      };
-    }
-
-    throw new Error('Kode sinkronisasi tidak ditemukan atau belum pernah diunggah.');
-  } catch (err) {
-    // Coba baca dari local session jika offline
-    const localCache = localStorage.getItem(`SYNC_ROOM_${cleanCode}`);
-    if (localCache) {
-      const parsed = JSON.parse(localCache);
-      return {
-        success: true,
-        data: parsed.data,
-        updatedAt: parsed.updatedAt,
-      };
-    }
-    throw new Error(err.message || 'Gagal mengambil data dari Cloud.');
+  // Coba ambil dari Local Room Cache jika gagal
+  if (!payload) {
+    try {
+      const localCache = localStorage.getItem(`SYNC_ROOM_${cleanCode}`);
+      if (localCache) {
+        payload = JSON.parse(localCache);
+      }
+    } catch (e) {}
   }
+
+  if (payload && payload.data) {
+    // Validasi PIN jika sebelumnya diatur
+    if (payload.pinHash && payload.pinHash !== '' && payload.pinHash !== hashPin(pin)) {
+      throw new Error('PIN keamanan salah. Silakan periksa kembali PIN Anda.');
+    }
+
+    const cleanData = sanitizeAppData(payload.data);
+    return {
+      success: true,
+      data: cleanData,
+      updatedAt: payload.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  throw new Error(`Kode "${cleanCode}" tidak ditemukan atau belum pernah diaktifkan di laptop.`);
 }

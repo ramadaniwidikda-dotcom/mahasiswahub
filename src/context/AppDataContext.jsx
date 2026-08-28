@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { INITIAL_DATA } from '../data/initialData';
 import { calculateIPK, calculateIPS, getMaxSKSLimit } from '../utils/gradeCalculator';
 import { getDeadlineInfo, sendBrowserNotification } from '../utils/notificationHelper';
-import { generateSyncCode, pushDataToCloud, pullDataFromCloud } from '../utils/cloudSync';
+import { generateSyncCode, pushDataToCloud, pullDataFromCloud, sanitizeAppData } from '../utils/cloudSync';
 
 const AppDataContext = createContext(null);
 const STORAGE_KEY = 'MAHASISWA_HUB_DATA_V1';
@@ -13,12 +13,12 @@ export function AppDataProvider({ children }) {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        return sanitizeAppData(JSON.parse(saved));
       }
     } catch (err) {
       console.error('Failed to load local storage data:', err);
     }
-    return INITIAL_DATA;
+    return sanitizeAppData(INITIAL_DATA);
   });
 
   const [theme, setTheme] = useState(() => {
@@ -124,13 +124,12 @@ export function AppDataProvider({ children }) {
       try {
         const res = await pullDataFromCloud(syncConfig.syncCode, syncConfig.pin);
         if (res.success && res.data) {
-          // If remote data is valid, update local state
           const remoteTime = new Date(res.updatedAt || 0).getTime();
           const localTime = new Date(syncConfig.lastSyncedAt || 0).getTime();
 
           if (remoteTime > localTime + 2000) {
             isRemoteUpdate.current = true;
-            setData(res.data);
+            setData(sanitizeAppData(res.data));
             setSyncConfig((prev) => ({
               ...prev,
               syncStatus: 'synced',
@@ -153,19 +152,21 @@ export function AppDataProvider({ children }) {
     };
   }, [syncConfig.enabled, syncConfig.syncCode, syncConfig.pin, syncConfig.lastSyncedAt]);
 
-  // Auto-generate notifications
+  // Auto-generate notifications (with safe defensive checks)
   useEffect(() => {
     const list = [];
     const now = new Date();
+    const taskList = data?.tasks || [];
+    const calendarList = data?.academicCalendar || [];
 
-    data.tasks.forEach((task) => {
-      if (task.status !== 'done' && task.deadline) {
+    taskList.forEach((task) => {
+      if (task && task.status !== 'done' && task.deadline) {
         const info = getDeadlineInfo(task.deadline, task.deadlineTime);
         if (info.status === 'overdue') {
           list.push({
             id: `notif-task-overdue-${task.id}`,
             title: `Tugas Terlambat: ${task.title}`,
-            message: `Mata kuliah: ${task.courseName}. Segera kumpulkan!`,
+            message: `Mata kuliah: ${task.courseName || 'Umum'}. Segera kumpulkan!`,
             type: 'urgent',
             timestamp: task.deadline,
             read: false,
@@ -175,7 +176,7 @@ export function AppDataProvider({ children }) {
           list.push({
             id: `notif-task-today-${task.id}`,
             title: `Deadline Hari Ini: ${task.title}`,
-            message: `Mata kuliah: ${task.courseName} (${info.label}).`,
+            message: `Mata kuliah: ${task.courseName || 'Umum'} (${info.label}).`,
             type: 'warning',
             timestamp: task.deadline,
             read: false,
@@ -185,7 +186,7 @@ export function AppDataProvider({ children }) {
           list.push({
             id: `notif-task-soon-${task.id}`,
             title: `Tugas Mendekati Batas: ${task.title}`,
-            message: `Mata kuliah: ${task.courseName} - ${info.label}.`,
+            message: `Mata kuliah: ${task.courseName || 'Umum'} - ${info.label}.`,
             type: 'info',
             timestamp: task.deadline,
             read: false,
@@ -195,30 +196,36 @@ export function AppDataProvider({ children }) {
       }
     });
 
-    data.academicCalendar.forEach((event) => {
-      const eventDate = new Date(event.date);
-      const diffDays = Math.ceil((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays >= 0 && diffDays <= 7) {
-        list.push({
-          id: `notif-event-${event.id}`,
-          title: `Agenda: ${event.title}`,
-          message: diffDays === 0 ? 'Berlangsung hari ini!' : `Akan berlangsung dalam ${diffDays} hari.`,
-          type: 'event',
-          timestamp: event.date,
-          read: false,
-          linkTo: 'schedule',
-        });
+    calendarList.forEach((event) => {
+      if (event && event.date) {
+        const eventDate = new Date(event.date);
+        const diffDays = Math.ceil((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays >= 0 && diffDays <= 7) {
+          list.push({
+            id: `notif-event-${event.id}`,
+            title: `Agenda: ${event.title}`,
+            message: diffDays === 0 ? 'Berlangsung hari ini!' : `Akan berlangsung dalam ${diffDays} hari.`,
+            type: 'event',
+            timestamp: event.date,
+            read: false,
+            linkTo: 'schedule',
+          });
+        }
       }
     });
 
     setNotifications(list);
   }, [data.tasks, data.academicCalendar]);
 
-  // Calculations
-  const currentKRS_SKS = data.krs.courses.reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
-  const { ipk: overallIPK, totalSKS: totalEarnedSKS } = calculateIPK(data.gradeHistory);
-  const latestFinishedSemester = data.gradeHistory[data.gradeHistory.length - 1];
-  const latestIPS = latestFinishedSemester ? latestFinishedSemester.ips : 3.50;
+  // Safe Calculations
+  const currentKRS_SKS = (data?.krs?.courses || []).reduce(
+    (sum, c) => sum + (Number(c?.sks) || 0),
+    0
+  );
+  const { ipk: overallIPK, totalSKS: totalEarnedSKS } = calculateIPK(data?.gradeHistory || []);
+  const gradeList = data?.gradeHistory || [];
+  const latestFinishedSemester = gradeList[gradeList.length - 1];
+  const latestIPS = latestFinishedSemester ? Number(latestFinishedSemester.ips) || 3.50 : 3.50;
   const maxAllowedSKS = getMaxSKSLimit(latestIPS);
 
   // Theme
@@ -262,16 +269,18 @@ export function AppDataProvider({ children }) {
   const joinSyncSession = async (syncCode, pin = '') => {
     if (!syncCode) return { success: false, message: 'Kode sinkronisasi wajib diisi.' };
 
+    const cleanCode = syncCode.trim().toUpperCase();
     setSyncConfig((prev) => ({ ...prev, isSyncing: true, syncStatus: 'syncing' }));
 
     try {
-      const res = await pullDataFromCloud(syncCode, pin);
+      const res = await pullDataFromCloud(cleanCode, pin);
       if (res.success && res.data) {
+        const cleanData = sanitizeAppData(res.data);
         isRemoteUpdate.current = true;
-        setData(res.data);
+        setData(cleanData);
         setSyncConfig({
           enabled: true,
-          syncCode: syncCode.toUpperCase().trim(),
+          syncCode: cleanCode,
           pin,
           lastSyncedAt: res.updatedAt || new Date().toISOString(),
           syncStatus: 'synced',
@@ -279,14 +288,14 @@ export function AppDataProvider({ children }) {
         });
         return { success: true, message: 'Berhasil terhubung ke sesi Cloud Sync!' };
       }
-      throw new Error('Data tidak ditemukan.');
+      throw new Error('Data tidak valid atau kosong.');
     } catch (err) {
       setSyncConfig((prev) => ({
         ...prev,
         isSyncing: false,
         syncStatus: 'error',
       }));
-      return { success: false, message: err.message };
+      return { success: false, message: err.message || 'Gagal menyinkronkan data.' };
     }
   };
 
@@ -336,7 +345,7 @@ export function AppDataProvider({ children }) {
       ...prev,
       krs: {
         ...prev.krs,
-        courses: [...prev.krs.courses, newCourse],
+        courses: [...(prev.krs?.courses || []), newCourse],
       },
     }));
   };
@@ -346,7 +355,7 @@ export function AppDataProvider({ children }) {
       ...prev,
       krs: {
         ...prev.krs,
-        courses: prev.krs.courses.map((c) => (c.id === id ? { ...c, ...updatedFields } : c)),
+        courses: (prev.krs?.courses || []).map((c) => (c.id === id ? { ...c, ...updatedFields } : c)),
       },
     }));
   };
@@ -356,7 +365,7 @@ export function AppDataProvider({ children }) {
       ...prev,
       krs: {
         ...prev.krs,
-        courses: prev.krs.courses.filter((c) => c.id !== id),
+        courses: (prev.krs?.courses || []).filter((c) => c.id !== id),
       },
     }));
   };
@@ -393,14 +402,14 @@ export function AppDataProvider({ children }) {
     };
     setData((prev) => ({
       ...prev,
-      materials: [newMaterial, ...prev.materials],
+      materials: [newMaterial, ...(prev.materials || [])],
     }));
   };
 
   const deleteMaterial = (id) => {
     setData((prev) => ({
       ...prev,
-      materials: prev.materials.filter((m) => m.id !== id),
+      materials: (prev.materials || []).filter((m) => m.id !== id),
     }));
   };
 
@@ -412,14 +421,14 @@ export function AppDataProvider({ children }) {
     };
     setData((prev) => ({
       ...prev,
-      links: [newLink, ...prev.links],
+      links: [newLink, ...(prev.links || [])],
     }));
   };
 
   const deleteLink = (id) => {
     setData((prev) => ({
       ...prev,
-      links: prev.links.filter((l) => l.id !== id),
+      links: (prev.links || []).filter((l) => l.id !== id),
     }));
   };
 
@@ -432,7 +441,7 @@ export function AppDataProvider({ children }) {
     };
     setData((prev) => ({
       ...prev,
-      tasks: [newTask, ...prev.tasks],
+      tasks: [newTask, ...(prev.tasks || [])],
     }));
 
     sendBrowserNotification(`Tugas Baru: ${task.title}`, {
@@ -443,14 +452,14 @@ export function AppDataProvider({ children }) {
   const updateTask = (id, updatedFields) => {
     setData((prev) => ({
       ...prev,
-      tasks: prev.tasks.map((t) => (t.id === id ? { ...t, ...updatedFields } : t)),
+      tasks: (prev.tasks || []).map((t) => (t.id === id ? { ...t, ...updatedFields } : t)),
     }));
   };
 
   const toggleTaskStatus = (id) => {
     setData((prev) => ({
       ...prev,
-      tasks: prev.tasks.map((t) => {
+      tasks: (prev.tasks || []).map((t) => {
         if (t.id === id) {
           const nextStatus = t.status === 'done' ? 'todo' : 'done';
           return { ...t, status: nextStatus };
@@ -463,14 +472,14 @@ export function AppDataProvider({ children }) {
   const deleteTask = (id) => {
     setData((prev) => ({
       ...prev,
-      tasks: prev.tasks.filter((t) => t.id !== id),
+      tasks: (prev.tasks || []).filter((t) => t.id !== id),
     }));
   };
 
   // --- GRADE & SEMESTER ACTIONS ---
   const addSemesterGrade = (semesterObj) => {
     const ips = calculateIPS(semesterObj.courses);
-    const totalSKS = semesterObj.courses.reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
+    const totalSKS = (semesterObj.courses || []).reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
     const newSem = {
       ...semesterObj,
       ips,
@@ -478,16 +487,16 @@ export function AppDataProvider({ children }) {
     };
     setData((prev) => ({
       ...prev,
-      gradeHistory: [...prev.gradeHistory, newSem],
+      gradeHistory: [...(prev.gradeHistory || []), newSem],
     }));
   };
 
   const updateSemesterGrade = (semesterNumber, updatedCourses) => {
     setData((prev) => {
-      const updatedHistory = prev.gradeHistory.map((sem) => {
+      const updatedHistory = (prev.gradeHistory || []).map((sem) => {
         if (sem.semester === semesterNumber) {
           const ips = calculateIPS(updatedCourses);
-          const totalSKS = updatedCourses.reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
+          const totalSKS = (updatedCourses || []).reduce((sum, c) => sum + (Number(c.sks) || 0), 0);
           return {
             ...sem,
             courses: updatedCourses,
@@ -507,7 +516,7 @@ export function AppDataProvider({ children }) {
   const deleteSemesterGrade = (semesterNumber) => {
     setData((prev) => ({
       ...prev,
-      gradeHistory: prev.gradeHistory.filter((sem) => sem.semester !== semesterNumber),
+      gradeHistory: (prev.gradeHistory || []).filter((sem) => sem.semester !== semesterNumber),
     }));
   };
 
@@ -519,14 +528,14 @@ export function AppDataProvider({ children }) {
     };
     setData((prev) => ({
       ...prev,
-      academicCalendar: [...prev.academicCalendar, newEvent],
+      academicCalendar: [...(prev.academicCalendar || []), newEvent],
     }));
   };
 
   const deleteCalendarEvent = (id) => {
     setData((prev) => ({
       ...prev,
-      academicCalendar: prev.academicCalendar.filter((e) => e.id !== id),
+      academicCalendar: (prev.academicCalendar || []).filter((e) => e.id !== id),
     }));
   };
 
@@ -548,7 +557,7 @@ export function AppDataProvider({ children }) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Backup_MahasiswaHub_${data.studentProfile.nim}_${new Date().toISOString().split('T')[0]}.json`;
+    link.download = `Backup_MahasiswaHub_${data?.studentProfile?.nim || 'student'}_${new Date().toISOString().split('T')[0]}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -556,18 +565,19 @@ export function AppDataProvider({ children }) {
   const importDataFromJSON = (jsonString) => {
     try {
       const parsed = JSON.parse(jsonString);
-      if (parsed.studentProfile && parsed.krs) {
-        setData(parsed);
+      if (parsed) {
+        const cleaned = sanitizeAppData(parsed);
+        setData(cleaned);
         return { success: true, message: 'Data berhasil diimpor sepenuhnya!' };
       }
-      return { success: false, message: 'Format data JSON tidak valid atau struktur tidak cocok.' };
+      return { success: false, message: 'Format data JSON tidak valid.' };
     } catch (err) {
       return { success: false, message: `Gagal membaca file JSON: ${err.message}` };
     }
   };
 
   const resetToDefaultData = () => {
-    setData(INITIAL_DATA);
+    setData(sanitizeAppData(INITIAL_DATA));
     localStorage.removeItem(STORAGE_KEY);
     disconnectCloudSync();
   };
