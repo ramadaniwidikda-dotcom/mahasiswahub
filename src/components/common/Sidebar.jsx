@@ -23,13 +23,19 @@ const NAV_ITEMS = [
 ];
 
 export default function Sidebar({ activeTab, setActiveTab, mobileOpen, setMobileOpen }) {
-  const { data, overallIPK, totalEarnedSKS } = useAppData();
-  const { studentProfile } = data;
+  const { data, overallIPK = 0, totalEarnedSKS = 0 } = useAppData();
+  const studentProfile = data?.studentProfile || {};
 
   const handleNavClick = (tabId) => {
     setActiveTab(tabId);
     if (setMobileOpen) setMobileOpen(false);
   };
+
+  const nameInitials = studentProfile?.name
+    ? studentProfile.name.split(' ').map((n) => n[0]).slice(0, 2).join('')
+    : 'MH';
+
+  const safeIPK = (Number(overallIPK) || 0).toFixed(2);
 
   return (
     <>
@@ -65,23 +71,23 @@ export default function Sidebar({ activeTab, setActiveTab, mobileOpen, setMobile
         <div className="p-4 mx-3 my-3 rounded-2xl bg-gradient-to-br from-indigo-50/70 to-primary-50/40 dark:from-slate-800/80 dark:to-slate-800/40 border border-indigo-100/60 dark:border-slate-700/60">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-primary-600 text-white font-bold text-sm flex items-center justify-center shrink-0">
-              {studentProfile.name.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+              {nameInitials}
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
-                {studentProfile.name}
+                {studentProfile?.name || 'Mahasiswa'}
               </p>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                NIM: {studentProfile.nim}
+                NIM: {studentProfile?.nim || '-'}
               </p>
             </div>
           </div>
           <div className="mt-3 pt-2.5 border-t border-indigo-100/80 dark:border-slate-700 flex justify-between items-center text-[11px]">
             <span className="text-slate-600 dark:text-slate-400">
-              Sem. <strong className="text-slate-800 dark:text-slate-200">{studentProfile.semester}</strong>
+              Sem. <strong className="text-slate-800 dark:text-slate-200">{studentProfile?.semester || 1}</strong>
             </span>
             <span className="text-slate-600 dark:text-slate-400">
-              IPK: <strong className="text-primary-600 dark:text-primary-400">{overallIPK.toFixed(2)}</strong>
+              IPK: <strong className="text-primary-600 dark:text-primary-400">{safeIPK}</strong>
             </span>
             <span className="text-slate-600 dark:text-slate-400">
               SKS: <strong className="text-slate-800 dark:text-slate-200">{totalEarnedSKS}</strong>
@@ -115,10 +121,10 @@ export default function Sidebar({ activeTab, setActiveTab, mobileOpen, setMobile
         {/* Academic Year Footer */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-800 text-center">
           <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-            T.A. {studentProfile.academicYear}
+            T.A. {studentProfile?.academicYear || '2026/2027'}
           </p>
           <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate mt-0.5">
-            {studentProfile.prodi}
+            {studentProfile?.prodi || 'Program Studi'}
           </p>
         </div>
       </aside>

@@ -37,51 +37,54 @@ import Modal from '../common/Modal';
 export default function GradeTracker() {
   const {
     data,
-    overallIPK,
-    totalEarnedSKS,
+    overallIPK = 0,
+    totalEarnedSKS = 0,
     addSemesterGrade,
     updateSemesterGrade,
     deleteSemesterGrade,
     updateProfile,
   } = useAppData();
 
-  const { studentProfile, gradeHistory } = data;
-  const standing = getAcademicStanding(overallIPK);
+  const studentProfile = data?.studentProfile || {};
+  const gradeHistory = data?.gradeHistory || [];
+  const standing = getAcademicStanding(overallIPK || 0);
 
-  const [expandedSemester, setExpandedSemester] = useState(gradeHistory[gradeHistory.length - 1]?.semester || 1);
+  const lastSem = gradeHistory.length > 0 ? gradeHistory[gradeHistory.length - 1] : null;
+  const [expandedSemester, setExpandedSemester] = useState(lastSem?.semester || 1);
   const [isAddSemesterOpen, setIsAddSemesterOpen] = useState(false);
   const [isEditGradeModalOpen, setIsEditGradeModalOpen] = useState(false);
   const [editingSemesterObj, setEditingSemesterObj] = useState(null);
 
   // Target Simulator State
-  const [targetIPKInput, setTargetIPKInput] = useState(studentProfile.targetIPK || 3.80);
-  const totalRequiredSKS = studentProfile.totalRequiredSKS || 144;
-  const remainingSKS = Math.max(0, totalRequiredSKS - totalEarnedSKS);
+  const [targetIPKInput, setTargetIPKInput] = useState(Number(studentProfile?.targetIPK) || 3.80);
+  const totalRequiredSKS = Number(studentProfile?.totalRequiredSKS) || 144;
+  const remainingSKS = Math.max(0, totalRequiredSKS - (Number(totalEarnedSKS) || 0));
 
   const simulationResult = simulateRequiredIPS(
-    overallIPK,
-    totalEarnedSKS,
-    targetIPKInput,
+    overallIPK || 0,
+    totalEarnedSKS || 0,
+    targetIPKInput || 3.8,
     remainingSKS
   );
 
   // Chart Data Preparation: calculate cumulative IPK at each semester point
   let runningPoints = 0;
   let runningSKS = 0;
-  const chartData = gradeHistory.map((sem) => {
-    sem.courses.forEach((c) => {
-      if (c.grade && GRADE_SCALE[c.grade] !== undefined) {
-        const sks = Number(c.sks) || 0;
+  const chartData = (gradeHistory || []).map((sem) => {
+    (sem?.courses || []).forEach((c) => {
+      if (c?.grade && GRADE_SCALE[c.grade] !== undefined) {
+        const sks = Number(c?.sks) || 0;
         runningPoints += sks * GRADE_SCALE[c.grade];
         runningSKS += sks;
       }
     });
     const semIPK = runningSKS > 0 ? Number((runningPoints / runningSKS).toFixed(2)) : 0;
+    const safeIPS = Number(sem?.ips) || (calculateIPS(sem?.courses || []));
     return {
-      name: `Sem ${sem.semester}`,
-      ips: Number(sem.ips.toFixed(2)),
+      name: `Sem ${sem?.semester || 1}`,
+      ips: Number(safeIPS.toFixed(2)),
       ipk: semIPK,
-      academicYear: sem.academicYear,
+      academicYear: sem?.academicYear || '',
     };
   });
 
@@ -109,11 +112,13 @@ export default function GradeTracker() {
 
   const handleSaveNewSemester = (e) => {
     e.preventDefault();
-    addSemesterGrade({
-      semester: Number(newSemesterNumber),
-      academicYear: newAcademicYear,
-      courses: newCoursesList,
-    });
+    if (addSemesterGrade) {
+      addSemesterGrade({
+        semester: Number(newSemesterNumber),
+        academicYear: newAcademicYear,
+        courses: newCoursesList,
+      });
+    }
     setIsAddSemesterOpen(false);
   };
 
@@ -124,11 +129,13 @@ export default function GradeTracker() {
 
   const handleSaveEditSemester = (e) => {
     e.preventDefault();
-    if (editingSemesterObj) {
+    if (editingSemesterObj && updateSemesterGrade) {
       updateSemesterGrade(editingSemesterObj.semester, editingSemesterObj.courses);
       setIsEditGradeModalOpen(false);
     }
   };
+
+  const safeIPK = (Number(overallIPK) || 0).toFixed(2);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -142,13 +149,13 @@ export default function GradeTracker() {
               <Award className="h-5 w-5 text-amber-300" />
             </div>
             <div className="mt-4 flex items-baseline gap-3">
-              <span className="text-5xl font-black">{overallIPK.toFixed(2)}</span>
+              <span className="text-5xl font-black">{safeIPK}</span>
               <span className="text-sm font-semibold text-indigo-200">/ 4.00</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-white/15">
             <span className="inline-block px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-xs font-bold text-white">
-              {standing.title}
+              {standing?.title || 'Memuaskan'}
             </span>
           </div>
         </div>
@@ -169,7 +176,7 @@ export default function GradeTracker() {
             <div className="w-full bg-slate-100 dark:bg-slate-800 h-2.5 rounded-full mt-4 overflow-hidden">
               <div
                 className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                style={{ width: `${Math.min(100, (totalEarnedSKS / totalRequiredSKS) * 100)}%` }}
+                style={{ width: `${Math.min(100, (Number(totalEarnedSKS) / totalRequiredSKS) * 100)}%` }}
               />
             </div>
           </div>
@@ -192,14 +199,14 @@ export default function GradeTracker() {
             </div>
             <div className="mt-3">
               <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {simulationResult.message}
+                {simulationResult?.message || ''}
               </p>
             </div>
           </div>
           <div className="mt-3 pt-3 border-t border-indigo-100 dark:border-slate-700 flex items-center justify-between text-xs">
             <span className="text-slate-500 dark:text-slate-400">Min. IPS Sisa:</span>
             <span className="font-bold text-base text-primary-600 dark:text-primary-400">
-              {simulationResult.requiredIPS > 0 ? simulationResult.requiredIPS.toFixed(2) : 'Aman'}
+              {simulationResult?.requiredIPS > 0 ? simulationResult.requiredIPS.toFixed(2) : 'Aman'}
             </span>
           </div>
         </div>
@@ -327,7 +334,7 @@ export default function GradeTracker() {
           <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15">
             <p className="text-xs text-indigo-200 font-semibold mb-1">Rekomendasi Strategi:</p>
             <p className="text-xs text-white leading-relaxed font-medium">
-              {simulationResult.message}
+              {simulationResult?.message || ''}
             </p>
           </div>
         </div>
@@ -354,26 +361,27 @@ export default function GradeTracker() {
         </div>
 
         <div className="divide-y divide-slate-100 dark:divide-slate-800">
-          {gradeHistory.map((sem) => {
-            const isExpanded = expandedSemester === sem.semester;
+          {(gradeHistory || []).map((sem) => {
+            const isExpanded = expandedSemester === sem?.semester;
+            const safeIPS = Number(sem?.ips) || 0;
 
             return (
-              <div key={sem.semester} className="p-5">
+              <div key={sem?.semester || Math.random()} className="p-5">
                 {/* Semester Accordion Header */}
                 <div className="flex items-center justify-between gap-4 cursor-pointer">
                   <div
-                    onClick={() => setExpandedSemester(isExpanded ? null : sem.semester)}
+                    onClick={() => setExpandedSemester(isExpanded ? null : sem?.semester)}
                     className="flex items-center gap-3 min-w-0 flex-1"
                   >
                     <div className="h-9 w-9 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-black text-sm flex items-center justify-center shrink-0">
-                      {sem.semester}
+                      {sem?.semester || 1}
                     </div>
                     <div>
                       <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                        Semester {sem.semester} ({sem.academicYear})
+                        Semester {sem?.semester || 1} ({sem?.academicYear || ''})
                       </h4>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        {sem.courses.length} Mata Kuliah • {sem.sks} SKS
+                        {(sem?.courses || []).length} Mata Kuliah • {sem?.sks || 0} SKS
                       </p>
                     </div>
                   </div>
@@ -382,7 +390,7 @@ export default function GradeTracker() {
                     <div className="text-right">
                       <span className="text-xs text-slate-400 block font-medium">IPS Semester</span>
                       <span className="text-base font-bold text-primary-600 dark:text-primary-400">
-                        {sem.ips.toFixed(2)}
+                        {safeIPS.toFixed(2)}
                       </span>
                     </div>
 
@@ -395,7 +403,7 @@ export default function GradeTracker() {
                     </button>
 
                     <button
-                      onClick={() => setExpandedSemester(isExpanded ? null : sem.semester)}
+                      onClick={() => setExpandedSemester(isExpanded ? null : sem?.semester)}
                       className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                     >
                       {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -418,18 +426,18 @@ export default function GradeTracker() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
-                        {sem.courses.map((course, idx) => {
-                          const point = GRADE_SCALE[course.grade] || 0;
-                          const mutu = course.sks * point;
+                        {(sem?.courses || []).map((course, idx) => {
+                          const point = GRADE_SCALE[course?.grade] || 0;
+                          const mutu = (Number(course?.sks) || 0) * point;
 
                           return (
                             <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                              <td className="py-2.5 font-bold text-slate-500">{course.code}</td>
-                              <td className="py-2.5 font-semibold text-slate-900 dark:text-white">{course.name}</td>
-                              <td className="py-2.5 text-center">{course.sks} SKS</td>
+                              <td className="py-2.5 font-bold text-slate-500">{course?.code || '-'}</td>
+                              <td className="py-2.5 font-semibold text-slate-900 dark:text-white">{course?.name || '-'}</td>
+                              <td className="py-2.5 text-center">{course?.sks || 0} SKS</td>
                               <td className="py-2.5 text-center">
                                 <span className="px-2 py-0.5 rounded-md font-bold text-xs bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                                  {course.grade}
+                                  {course?.grade || 'A'}
                                 </span>
                               </td>
                               <td className="py-2.5 text-center font-medium">{point.toFixed(2)}</td>
@@ -580,7 +588,7 @@ export default function GradeTracker() {
         {editingSemesterObj && (
           <form onSubmit={handleSaveEditSemester} className="space-y-4 text-xs">
             <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {editingSemesterObj.courses.map((c, index) => (
+              {(editingSemesterObj.courses || []).map((c, index) => (
                 <div key={index} className="flex items-center gap-2">
                   <input
                     type="text"
@@ -637,7 +645,7 @@ export default function GradeTracker() {
               <button
                 type="button"
                 onClick={() => {
-                  deleteSemesterGrade(editingSemesterObj.semester);
+                  if (deleteSemesterGrade) deleteSemesterGrade(editingSemesterObj.semester);
                   setIsEditGradeModalOpen(false);
                 }}
                 className="text-rose-600 hover:underline font-semibold flex items-center gap-1"

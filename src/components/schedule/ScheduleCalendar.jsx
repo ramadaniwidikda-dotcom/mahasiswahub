@@ -27,7 +27,8 @@ const EVENT_TYPES = [
 
 export default function ScheduleCalendar() {
   const { data, addCalendarEvent, deleteCalendarEvent } = useAppData();
-  const { krs, academicCalendar } = data;
+  const krs = data?.krs || { courses: [] };
+  const academicCalendar = data?.academicCalendar || [];
 
   const [activeView, setActiveView] = useState('weekly'); // 'weekly' | 'academic'
   const [selectedDayFilter, setSelectedDayFilter] = useState('all');
@@ -44,19 +45,19 @@ export default function ScheduleCalendar() {
   const handleExportICS = () => {
     // Combine classes and academic events
     const exportList = [
-      ...krs.courses.map((c) => ({
-        title: `${c.code} - ${c.name}`,
-        day: c.day,
-        startTime: c.startTime,
-        endTime: c.endTime,
-        room: c.room,
-        lecturer: c.lecturer,
-        description: `Kuliah ${c.name} (${c.sks} SKS, Kelas ${c.classCode})`,
+      ...(krs?.courses || []).map((c) => ({
+        title: `${c?.code || 'MATKUL'} - ${c?.name || 'Kuliah'}`,
+        day: c?.day || 'Senin',
+        startTime: c?.startTime || '08:00',
+        endTime: c?.endTime || '10:00',
+        room: c?.room || '',
+        lecturer: c?.lecturer || '',
+        description: `Kuliah ${c?.name || ''} (${c?.sks || 3} SKS, Kelas ${c?.classCode || '-'})`,
       })),
-      ...academicCalendar.map((e) => ({
-        title: e.title,
-        date: e.date,
-        description: e.description,
+      ...(academicCalendar || []).map((e) => ({
+        title: e?.title || 'Agenda',
+        date: e?.date || '',
+        description: e?.description || '',
       })),
     ];
     downloadICSFile(exportList, 'Jadwal_Kuliah_dan_Kalender_Akademik.ics');
@@ -64,7 +65,9 @@ export default function ScheduleCalendar() {
 
   const handleEventSubmit = (e) => {
     e.preventDefault();
-    addCalendarEvent(eventForm);
+    if (addCalendarEvent) {
+      addCalendarEvent(eventForm);
+    }
     setIsAddEventOpen(false);
     setEventForm({
       title: '',
@@ -159,9 +162,9 @@ export default function ScheduleCalendar() {
           {/* Timetable Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {DAYS.filter((d) => selectedDayFilter === 'all' || selectedDayFilter === d).map((day) => {
-              const dayCourses = krs.courses
-                .filter((c) => c.day === day)
-                .sort((a, b) => a.startTime.localeCompare(b.startTime));
+              const dayCourses = (krs?.courses || [])
+                .filter((c) => (c?.day || '').toLowerCase() === day.toLowerCase())
+                .sort((a, b) => (a?.startTime || '').localeCompare(b?.startTime || ''));
 
               return (
                 <div
@@ -185,38 +188,38 @@ export default function ScheduleCalendar() {
                     ) : (
                       dayCourses.map((course) => (
                         <div
-                          key={course.id}
+                          key={course?.id || Math.random()}
                           className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 relative overflow-hidden group hover:border-primary-300 dark:hover:border-primary-800 transition-all"
                         >
                           <div
                             className="absolute top-0 bottom-0 left-0 w-1.5"
-                            style={{ backgroundColor: course.color || '#6366f1' }}
+                            style={{ backgroundColor: course?.color || '#6366f1' }}
                           />
                           <div className="pl-1">
                             <div className="flex items-center justify-between gap-1 text-[11px] mb-1">
                               <span className="font-bold text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-950 px-2 py-0.5 rounded-md">
-                                {course.code} • {course.sks} SKS
+                                {course?.code || 'IF'} • {course?.sks || 3} SKS
                               </span>
                               <span className="font-semibold text-slate-500">
-                                Kelas {course.classCode}
+                                Kelas {course?.classCode || '-'}
                               </span>
                             </div>
 
                             <h4 className="font-bold text-sm text-slate-900 dark:text-white leading-snug">
-                              {course.name}
+                              {course?.name || 'Mata Kuliah'}
                             </h4>
 
                             <div className="mt-3 space-y-1 text-xs text-slate-600 dark:text-slate-400">
                               <p className="flex items-center gap-1.5 font-medium text-slate-800 dark:text-slate-200">
                                 <Clock className="h-3.5 w-3.5 text-primary-500" />
-                                <span>{course.startTime} - {course.endTime} WIB</span>
+                                <span>{course?.startTime || '08:00'} - {course?.endTime || '10:00'} WIB</span>
                               </p>
                               <p className="flex items-center gap-1.5">
                                 <MapPin className="h-3.5 w-3.5 text-slate-400" />
-                                <span>{course.room}</span>
+                                <span>{course?.room || '-'}</span>
                               </p>
                               <p className="text-[11px] text-slate-500 truncate pt-1">
-                                Dosen: {course.lecturer}
+                                Dosen: {course?.lecturer || '-'}
                               </p>
                             </div>
                           </div>
@@ -234,13 +237,13 @@ export default function ScheduleCalendar() {
       {/* --- VIEW 2: KALENDER AKADEMIK & AGENDA --- */}
       {activeView === 'academic' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {academicCalendar.map((event) => {
+          {(academicCalendar || []).map((event) => {
             const eventConfig =
-              EVENT_TYPES.find((t) => t.id === event.type) || EVENT_TYPES[0];
+              EVENT_TYPES.find((t) => t.id === event?.type) || EVENT_TYPES[0];
 
             return (
               <div
-                key={event.id}
+                key={event?.id || Math.random()}
                 className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
               >
                 <div>
@@ -249,7 +252,7 @@ export default function ScheduleCalendar() {
                       {eventConfig.label}
                     </span>
                     <button
-                      onClick={() => deleteCalendarEvent(event.id)}
+                      onClick={() => deleteCalendarEvent && deleteCalendarEvent(event.id)}
                       className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
                       title="Hapus Agenda"
                     >
@@ -258,11 +261,11 @@ export default function ScheduleCalendar() {
                   </div>
 
                   <h4 className="font-bold text-base text-slate-900 dark:text-white mt-3">
-                    {event.title}
+                    {event?.title || 'Agenda'}
                   </h4>
 
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
-                    {event.description}
+                    {event?.description || ''}
                   </p>
                 </div>
 
@@ -270,7 +273,7 @@ export default function ScheduleCalendar() {
                   <div className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
                     <CalendarIcon className="h-4 w-4 text-primary-500" />
                     <span>
-                      {event.date} {event.endDate ? `s.d. ${event.endDate}` : ''}
+                      {event?.date || ''} {event?.endDate ? `s.d. ${event.endDate}` : ''}
                     </span>
                   </div>
                 </div>
